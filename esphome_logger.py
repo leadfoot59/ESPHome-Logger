@@ -1,5 +1,6 @@
 import asyncio
 import csv
+import glob
 from math import isnan
 import os
 from datetime import datetime, timedelta
@@ -11,13 +12,14 @@ EASTERN = ZoneInfo("America/New_York")
 
 # ESPHomeLogger class
 class ESPHomeLogger:
-    def __init__(self, host, password=None, csv_dir="logs", retry_interval=15):
+    def __init__(self, host, password=None, csv_dir="logs", retry_interval=15, retention_days=None):
         self.host = host
         self.client = APIClient(host, 6053, password=password, noise_psk=password)
         self.csv_dir = csv_dir
         self.current_date = None
         self.entity_map = {}
         self.retry_interval = retry_interval
+        self.retention_days = retention_days
         self.connected = False
         self.connected_time = None
 
@@ -32,6 +34,7 @@ class ESPHomeLogger:
             if not os.path.exists(self.csv_file):
                 with open(self.csv_file, "w", newline="") as f:
                     csv.writer(f).writerow(["timestamp", "entity_id", "friendly_name", "state"])
+            self._delete_old_logs()
         return self.csv_file
 
     # Connect to the ESPHome device
@@ -76,6 +79,22 @@ class ESPHomeLogger:
         with open(self._get_csv_file(), "a", newline="") as f:
             csv.writer(f).writerow([now, entity_id, friendly, value])
             print(f"State update: {now} - {self.host} - {entity_id} - {friendly} - {value}")
+
+    # Delete log files older than retention_days
+    def _delete_old_logs(self):
+        if self.retention_days is None:
+            return
+        cutoff = datetime.now(EASTERN).date() - timedelta(days=self.retention_days)
+        for csv_file in glob.glob(os.path.join(self.csv_dir, "esphome_*.csv")):
+            filename = os.path.basename(csv_file)
+            try:
+                date_str = filename.replace("esphome_", "").replace(".csv", "")
+                file_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                if file_date < cutoff:
+                    os.remove(csv_file)
+                    print(f"Deleted old log file: {csv_file}")
+            except ValueError:
+                continue
 
     # Run the logger with retry logic
     async def run(self):
