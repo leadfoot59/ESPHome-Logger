@@ -2,9 +2,12 @@ import asyncio
 import csv
 from math import isnan
 import os
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from aioesphomeapi import APIClient
 from aioesphomeapi.core import APIConnectionError
+
+EASTERN = ZoneInfo("America/New_York")
 
 # ESPHomeLogger class
 class ESPHomeLogger:
@@ -22,7 +25,7 @@ class ESPHomeLogger:
 
     # Get the CSV file for the current date
     def _get_csv_file(self):
-        today = date.today().isoformat()
+        today = datetime.now(EASTERN).date().isoformat()
         if today != self.current_date:
             self.current_date = today
             self.csv_file = os.path.join(self.csv_dir, f"esphome_{today}.csv")
@@ -39,7 +42,7 @@ class ESPHomeLogger:
             self.entity_map = {ent.key: ent.name for ent in entities}
             self.client.subscribe_states(self._state_callback)
             self.connected = True
-            self.connected_time = datetime.now()
+            self.connected_time = datetime.now(EASTERN)
             print(f"Successfully connected to {self.host}")
         except APIConnectionError as e:
             self.connected = False
@@ -69,9 +72,10 @@ class ESPHomeLogger:
             pass
 
         # Write to the CSV file
+        now = datetime.now(EASTERN).strftime("%Y-%m-%d %H:%M:%S")
         with open(self._get_csv_file(), "a", newline="") as f:
-            csv.writer(f).writerow([datetime.now().isoformat(), entity_id, friendly, value])
-            print(f"State update: {datetime.now().isoformat()} - {self.host} - {entity_id} - {friendly} - {value}")
+            csv.writer(f).writerow([now, entity_id, friendly, value])
+            print(f"State update: {now} - {self.host} - {entity_id} - {friendly} - {value}")
 
     # Run the logger with retry logic
     async def run(self):
@@ -85,7 +89,7 @@ class ESPHomeLogger:
                 await asyncio.sleep(10)
                 
                 # Assume disconnected if connected time is more than 5 minute ago
-                if self.connected_time and datetime.now() - self.connected_time > timedelta(minutes=5):
+                if self.connected_time and datetime.now(EASTERN) - self.connected_time > timedelta(minutes=5):
                     print(f"Last connection was more than 5 minutes ago, assuming disconnected")
                     self.connected = False
                     self.connected_time = None
