@@ -38,7 +38,7 @@ class ESPHomeLogger:
         self.retry_interval = retry_interval
         self.retention_days = retention_days
         self.connected = False
-        self.connected_time: datetime | None = None
+        self.last_activity: datetime | None = None
 
         os.makedirs(csv_dir, exist_ok=True)
 
@@ -62,7 +62,7 @@ class ESPHomeLogger:
             self.entity_map = {ent.key: ent.name for ent in entities}
             self.client.subscribe_states(self._state_callback)
             self.connected = True
-            self.connected_time = datetime.now(EASTERN)
+            self.last_activity = datetime.now(EASTERN)
             log(f"Successfully connected to {self.host}")
         except APIConnectionError as e:
             self.connected = False
@@ -75,6 +75,7 @@ class ESPHomeLogger:
 
     # State callback
     def _state_callback(self, state):
+        self.last_activity = datetime.now(EASTERN)
         entity_id = state.key
         friendly = self.entity_map.get(entity_id, "unknown")
         value = getattr(state, "state", None)
@@ -125,21 +126,33 @@ class ESPHomeLogger:
                 # Keep the connection alive
                 await asyncio.sleep(10)
                 
-                # Assume disconnected if connected time is more than 5 minute ago
-                connected_time = self.connected_time
-                if connected_time and datetime.now(EASTERN) - connected_time > timedelta(minutes=5):
-                    log(f"Last connection was more than 5 minutes ago, assuming disconnected")
+                # Assume disconnected if no activity for more than 5 minutes
+                last_activity = self.last_activity
+                if last_activity and datetime.now(EASTERN) - last_activity > timedelta(minutes=5):
+                    log(f"No activity from {self.host} for 5 minutes, reconnecting")
                     self.connected = False
-                    self.connected_time = None
+                    self.last_activity = None
+                    try:
+                        await self.client.disconnect()
+                    except Exception:
+                        pass
 
             except APIConnectionError as e:
                 log(f"Connection lost to {self.host}: {e}")
                 self.connected = False
+                try:
+                    await self.client.disconnect()
+                except Exception:
+                    pass
                 log(f"Retrying connection to {self.host} in {self.retry_interval} seconds...")
                 await asyncio.sleep(self.retry_interval)
 
             except Exception as e:
                 log(f"Unexpected error with {self.host}: {e}")
                 self.connected = False
+                try:
+                    await self.client.disconnect()
+                except Exception:
+                    pass
                 log(f"Retrying connection to {self.host} in {self.retry_interval} seconds...")
                 await asyncio.sleep(self.retry_interval)
