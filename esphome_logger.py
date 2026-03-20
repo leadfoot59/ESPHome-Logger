@@ -10,6 +10,22 @@ from aioesphomeapi.core import APIConnectionError
 
 EASTERN = ZoneInfo("America/New_York")
 
+_log_dir = None
+
+def setup_logging(log_dir):
+    global _log_dir
+    _log_dir = log_dir
+    os.makedirs(log_dir, exist_ok=True)
+
+def log(msg):
+    ts = datetime.now(EASTERN).strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{ts}] {msg}"
+    print(line)
+    if _log_dir is not None:
+        log_file = os.path.join(_log_dir, "esphome_logger.log")
+        with open(log_file, "a") as f:
+            f.write(line + "\n")
+
 # ESPHomeLogger class
 class ESPHomeLogger:
     def __init__(self, host, password=None, csv_dir="logs", retry_interval=15, retention_days=None):
@@ -46,14 +62,14 @@ class ESPHomeLogger:
             self.client.subscribe_states(self._state_callback)
             self.connected = True
             self.connected_time = datetime.now(EASTERN)
-            print(f"Successfully connected to {self.host}")
+            log(f"Successfully connected to {self.host}")
         except APIConnectionError as e:
             self.connected = False
-            print(f"Connection failed to {self.host}: {e}")
+            log(f"Connection failed to {self.host}: {e}")
             raise
         except Exception as e:
             self.connected = False
-            print(f"Unexpected error connecting to {self.host}: {e}")
+            log(f"Unexpected error connecting to {self.host}: {e}")
             raise
 
     # State callback
@@ -78,7 +94,7 @@ class ESPHomeLogger:
         now = datetime.now(EASTERN).strftime("%Y-%m-%d %H:%M:%S")
         with open(self._get_csv_file(), "a", newline="") as f:
             csv.writer(f).writerow([now, entity_id, friendly, value])
-            # print(f"State update: {now} - {self.host} - {entity_id} - {friendly} - {value}")
+            # log(f"State update: {self.host} - {entity_id} - {friendly} - {value}")
 
     # Delete log files older than retention_days
     def _delete_old_logs(self):
@@ -92,7 +108,7 @@ class ESPHomeLogger:
                 file_date = datetime.strptime(date_str, "%Y-%m-%d").date()
                 if file_date < cutoff:
                     os.remove(csv_file)
-                    print(f"Deleted old log file: {csv_file}")
+                    log(f"Deleted old log file: {csv_file}")
             except ValueError:
                 continue
 
@@ -101,7 +117,7 @@ class ESPHomeLogger:
         while True:
             try:
                 if not self.connected:
-                    print(f"Connecting to {self.host}")
+                    log(f"Connecting to {self.host}")
                     await self.connect()
                 
                 # Keep the connection alive
@@ -109,18 +125,18 @@ class ESPHomeLogger:
                 
                 # Assume disconnected if connected time is more than 5 minute ago
                 if self.connected_time and datetime.now(EASTERN) - self.connected_time > timedelta(minutes=5):
-                    print(f"Last connection was more than 5 minutes ago, assuming disconnected")
+                    log(f"Last connection was more than 5 minutes ago, assuming disconnected")
                     self.connected = False
                     self.connected_time = None
 
             except APIConnectionError as e:
-                print(f"Connection lost to {self.host}: {e}")
+                log(f"Connection lost to {self.host}: {e}")
                 self.connected = False
-                print(f"Retrying connection to {self.host} in {self.retry_interval} seconds...")
+                log(f"Retrying connection to {self.host} in {self.retry_interval} seconds...")
                 await asyncio.sleep(self.retry_interval)
-                
+
             except Exception as e:
-                print(f"Unexpected error with {self.host}: {e}")
+                log(f"Unexpected error with {self.host}: {e}")
                 self.connected = False
-                print(f"Retrying connection to {self.host} in {self.retry_interval} seconds...")
+                log(f"Retrying connection to {self.host} in {self.retry_interval} seconds...")
                 await asyncio.sleep(self.retry_interval)
