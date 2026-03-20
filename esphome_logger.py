@@ -78,7 +78,7 @@ class ESPHomeLogger:
         now = datetime.now(EASTERN).strftime("%Y-%m-%d %H:%M:%S")
         with open(self._get_csv_file(), "a", newline="") as f:
             csv.writer(f).writerow([now, entity_id, friendly, value])
-            print(f"State update: {now} - {self.host} - {entity_id} - {friendly} - {value}")
+            # print(f"State update: {now} - {self.host} - {entity_id} - {friendly} - {value}")
 
     # Delete log files older than retention_days
     def _delete_old_logs(self):
