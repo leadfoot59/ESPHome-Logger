@@ -10,14 +10,14 @@ from aioesphomeapi.core import APIConnectionError
 
 EASTERN = ZoneInfo("America/New_York")
 
-_log_dir = None
+_log_dir: str | None = None
 
-def setup_logging(log_dir):
+def setup_logging(log_dir: str) -> None:
     global _log_dir
     _log_dir = log_dir
     os.makedirs(log_dir, exist_ok=True)
 
-def log(msg):
+def log(msg: str) -> None:
     ts = datetime.now(EASTERN).strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{ts}] {msg}"
     print(line)
@@ -28,16 +28,17 @@ def log(msg):
 
 # ESPHomeLogger class
 class ESPHomeLogger:
-    def __init__(self, host, password=None, csv_dir="logs", retry_interval=15, retention_days=None):
+    def __init__(self, host: str, password: str | None = None, csv_dir: str = "logs", retry_interval: int = 15, retention_days: int | None = None):
         self.host = host
         self.client = APIClient(host, 6053, password=password, noise_psk=password)
         self.csv_dir = csv_dir
-        self.current_date = None
-        self.entity_map = {}
+        self.current_date: str | None = None
+        self.csv_file: str = ""
+        self.entity_map: dict[int, str] = {}
         self.retry_interval = retry_interval
         self.retention_days = retention_days
         self.connected = False
-        self.connected_time = None
+        self.connected_time: datetime | None = None
 
         os.makedirs(csv_dir, exist_ok=True)
 
@@ -98,9 +99,10 @@ class ESPHomeLogger:
 
     # Delete log files older than retention_days
     def _delete_old_logs(self):
-        if self.retention_days is None:
+        retention_days = self.retention_days
+        if retention_days is None:
             return
-        cutoff = datetime.now(EASTERN).date() - timedelta(days=self.retention_days)
+        cutoff = datetime.now(EASTERN).date() - timedelta(days=retention_days)
         for csv_file in glob.glob(os.path.join(self.csv_dir, "esphome_*.csv")):
             filename = os.path.basename(csv_file)
             try:
@@ -124,7 +126,8 @@ class ESPHomeLogger:
                 await asyncio.sleep(10)
                 
                 # Assume disconnected if connected time is more than 5 minute ago
-                if self.connected_time and datetime.now(EASTERN) - self.connected_time > timedelta(minutes=5):
+                connected_time = self.connected_time
+                if connected_time and datetime.now(EASTERN) - connected_time > timedelta(minutes=5):
                     log(f"Last connection was more than 5 minutes ago, assuming disconnected")
                     self.connected = False
                     self.connected_time = None

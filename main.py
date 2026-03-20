@@ -42,7 +42,7 @@ async def main():
     if not devices:
         log("No devices found. Add API_HOST_<DEVICE_NAME> entries to .env")
         return
-    log(f"Discovered {len(devices)} device(s): {', '.join(d['host'] for d in devices)}")
+    log(f"Discovered {len(devices)} device(s): {', '.join(str(d['host']) for d in devices)}")
     loggers = [ESPHomeLogger(**dev) for dev in devices]
     await asyncio.gather(*(logger.run() for logger in loggers))
 
