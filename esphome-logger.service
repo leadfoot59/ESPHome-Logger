@@ -1,0 +1,15 @@
+[Unit]
+Description=ESPHome Logger
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/GitHub/ESPHome-Logger
+ExecStart=/home/pi/GitHub/ESPHome-Logger/venv/bin/python main.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
