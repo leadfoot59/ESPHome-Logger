@@ -3,10 +3,12 @@ import csv
 import glob
 from math import isnan
 import os
+import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from aioesphomeapi import APIClient
 from aioesphomeapi.core import APIConnectionError
+from aioesphomeapi.model import LogLevel
 
 EASTERN = ZoneInfo("America/New_York")
 
@@ -61,6 +63,7 @@ class ESPHomeLogger:
             entities, _ = await self.client.list_entities_services()
             self.entity_map = {ent.key: ent.name for ent in entities}
             self.client.subscribe_states(self._state_callback)
+            self.client.subscribe_logs(self._log_callback, log_level=LogLevel.LOG_LEVEL_VERY_VERBOSE)
             self.connected = True
             self.last_activity = datetime.now(EASTERN)
             log(f"Successfully connected to {self.host}")
@@ -72,6 +75,21 @@ class ESPHomeLogger:
             self.connected = False
             log(f"Unexpected error connecting to {self.host}: {e}")
             raise
+
+    # Get the device log file for the current date
+    def _get_log_file(self) -> str:
+        today = datetime.now(EASTERN).date().isoformat()
+        return os.path.join(self.csv_dir, f"esphome_{today}.log")
+
+    # Device log callback
+    def _log_callback(self, msg) -> None:
+        self.last_activity = datetime.now(EASTERN)
+        text = re.sub(r"\x1b\[[0-9;]*m", "", msg.message.decode("utf8", "backslashreplace")).rstrip()
+        if not text:
+            return
+        ts = datetime.now(EASTERN).strftime("%Y-%m-%d %H:%M:%S")
+        with open(self._get_log_file(), "a") as f:
+            f.write(f"[{ts}] {text}\n")
 
     # State callback
     def _state_callback(self, state):
@@ -104,16 +122,17 @@ class ESPHomeLogger:
         if retention_days is None:
             return
         cutoff = datetime.now(EASTERN).date() - timedelta(days=retention_days)
-        for csv_file in glob.glob(os.path.join(self.csv_dir, "esphome_*.csv")):
-            filename = os.path.basename(csv_file)
-            try:
-                date_str = filename.replace("esphome_", "").replace(".csv", "")
-                file_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-                if file_date < cutoff:
-                    os.remove(csv_file)
-                    log(f"Deleted old log file: {csv_file}")
-            except ValueError:
-                continue
+        for pattern in ["esphome_*.csv", "esphome_*.log"]:
+            for old_file in glob.glob(os.path.join(self.csv_dir, pattern)):
+                filename = os.path.basename(old_file)
+                try:
+                    date_str = filename.split("_", 1)[1].rsplit(".", 1)[0]
+                    file_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                    if file_date < cutoff:
+                        os.remove(old_file)
+                        log(f"Deleted old file: {old_file}")
+                except (ValueError, IndexError):
+                    continue
 
     # Run the logger with retry logic
     async def run(self):

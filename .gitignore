@@ -2,3 +2,5 @@
 .env
 /logs
 /__pycache__
+credentials.json
+token.json
