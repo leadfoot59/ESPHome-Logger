@@ -1,5 +1,5 @@
 import asyncio
-from esphome_logger import ESPHomeLogger, log, setup_logging
+from esphome_logger import ESPHomeLogger, InfluxConfig, log, setup_logging
 from dotenv import load_dotenv
 import os
 
@@ -14,6 +14,18 @@ setup_logging(LOG_DIR)
 LOG_RETENTION_DAYS = os.getenv("LOG_RETENTION_DAYS")
 if LOG_RETENTION_DAYS is not None:
     LOG_RETENTION_DAYS = int(LOG_RETENTION_DAYS)
+
+# InfluxDB configuration (optional)
+_influx_cfg: InfluxConfig | None = None
+_influx_url = os.getenv("INFLUXDB_URL", "").strip()
+if _influx_url:
+    _influx_cfg = InfluxConfig(
+        url=_influx_url,
+        token=os.getenv("INFLUXDB_TOKEN", ""),
+        org=os.getenv("INFLUXDB_ORG", ""),
+        bucket=os.getenv("INFLUXDB_BUCKET", "esphome"),
+    )
+    log(f"InfluxDB configured: {_influx_url}")
 
 
 def discover_devices():
@@ -33,6 +45,7 @@ def discover_devices():
                 "password": password,
                 "csv_dir": os.path.join(LOG_DIR, subdir),
                 "retention_days": LOG_RETENTION_DAYS,
+                "influx_cfg": _influx_cfg,
             })
     return devices
 
@@ -47,4 +60,7 @@ async def main():
     await asyncio.gather(*(logger.run() for logger in loggers))
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        log("Shutting down")

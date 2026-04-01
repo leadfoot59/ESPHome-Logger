@@ -1,5 +1,6 @@
 import asyncio
 import csv
+import dataclasses
 import glob
 from math import isnan
 import os
@@ -9,6 +10,13 @@ from zoneinfo import ZoneInfo
 from aioesphomeapi import APIClient
 from aioesphomeapi.core import APIConnectionError
 from aioesphomeapi.model import LogLevel
+
+try:
+    from influxdb_client import InfluxDBClient, Point
+    from influxdb_client.client.write_api import SYNCHRONOUS
+    _INFLUXDB_AVAILABLE = True
+except ImportError:
+    _INFLUXDB_AVAILABLE = False
 
 EASTERN = ZoneInfo("America/New_York")
 
@@ -28,9 +36,18 @@ def log(msg: str) -> None:
         with open(log_file, "a") as f:
             f.write(line + "\n")
 
+
+@dataclasses.dataclass
+class InfluxConfig:
+    url: str
+    token: str
+    org: str
+    bucket: str
+
+
 # ESPHomeLogger class
 class ESPHomeLogger:
-    def __init__(self, host: str, password: str | None = None, csv_dir: str = "logs", retry_interval: int = 15, retention_days: int | None = None):
+    def __init__(self, host: str, password: str | None = None, csv_dir: str = "logs", retry_interval: int = 15, retention_days: int | None = None, influx_cfg: InfluxConfig | None = None):
         self.host = host
         self.client = APIClient(host, 6053, password=password, noise_psk=password)
         self.csv_dir = csv_dir
@@ -41,6 +58,25 @@ class ESPHomeLogger:
         self.retention_days = retention_days
         self.connected = False
         self.last_activity: datetime | None = None
+
+        self._influx_client = None
+        self._influx_write_api = None
+        self._influx_bucket: str = ""
+        self._influx_org: str = ""
+
+        if influx_cfg is not None:
+            if not _INFLUXDB_AVAILABLE:
+                log("WARNING: INFLUXDB_URL is set but influxdb-client is not installed. InfluxDB writes disabled.")
+            else:
+                self._influx_client = InfluxDBClient(
+                    url=influx_cfg.url,
+                    token=influx_cfg.token,
+                    org=influx_cfg.org,
+                )
+                self._influx_write_api = self._influx_client.write_api(write_options=SYNCHRONOUS)
+                self._influx_bucket = influx_cfg.bucket
+                self._influx_org = influx_cfg.org
+                log(f"InfluxDB enabled for {self.host} -> {influx_cfg.url}/{influx_cfg.bucket}")
 
         os.makedirs(csv_dir, exist_ok=True)
 
@@ -97,24 +133,44 @@ class ESPHomeLogger:
         entity_id = state.key
         friendly = self.entity_map.get(entity_id, "unknown")
         value = getattr(state, "state", None)
-        
+
         # Skip if the value is None or nan
         if value is None:
             return
-        
+
         # Check if value is a number and if it's NaN
         try:
             if isinstance(value, (int, float)) and isnan(value):
                 return
         except (TypeError, ValueError):
-            # If it's not a number, continue processing
             pass
 
         # Write to the CSV file
         now = datetime.now(EASTERN).strftime("%Y-%m-%d %H:%M:%S")
         with open(self._get_csv_file(), "a", newline="") as f:
             csv.writer(f).writerow([now, entity_id, friendly, value])
-            # log(f"State update: {self.host} - {entity_id} - {friendly} - {value}")
+
+        # Write to InfluxDB
+        if self._influx_write_api is not None:
+            try:
+                try:
+                    influx_value: float | str = float(value)
+                    field_key = "value"
+                except (TypeError, ValueError):
+                    influx_value = str(value)
+                    field_key = "value_str"
+
+                point = (
+                    Point("sensor_state")
+                    .tag("host", self.host)
+                    .tag("entity_id", str(entity_id))
+                    .tag("friendly_name", friendly)
+                    .field(field_key, influx_value)
+                    .time(datetime.now(EASTERN))
+                )
+                self._influx_write_api.write(bucket=self._influx_bucket, org=self._influx_org, record=point)
+            except Exception as e:
+                log(f"WARNING: InfluxDB write failed for {self.host}/{friendly}: {e}")
 
     # Delete log files older than retention_days
     def _delete_old_logs(self):
@@ -134,44 +190,60 @@ class ESPHomeLogger:
                 except (ValueError, IndexError):
                     continue
 
+    # Close InfluxDB client
+    def close(self):
+        if self._influx_write_api is not None:
+            try:
+                self._influx_write_api.close()
+            except Exception:
+                pass
+        if self._influx_client is not None:
+            try:
+                self._influx_client.close()
+            except Exception:
+                pass
+
     # Run the logger with retry logic
     async def run(self):
-        while True:
-            try:
-                if not self.connected:
-                    log(f"Connecting to {self.host}")
-                    await self.connect()
-                
-                # Keep the connection alive
-                await asyncio.sleep(10)
-                
-                # Assume disconnected if no activity for more than 5 minutes
-                last_activity = self.last_activity
-                if last_activity and datetime.now(EASTERN) - last_activity > timedelta(minutes=5):
-                    log(f"No activity from {self.host} for 5 minutes, reconnecting")
+        try:
+            while True:
+                try:
+                    if not self.connected:
+                        log(f"Connecting to {self.host}")
+                        await self.connect()
+
+                    # Keep the connection alive
+                    await asyncio.sleep(10)
+
+                    # Assume disconnected if no activity for more than 5 minutes
+                    last_activity = self.last_activity
+                    if last_activity and datetime.now(EASTERN) - last_activity > timedelta(minutes=5):
+                        log(f"No activity from {self.host} for 5 minutes, reconnecting")
+                        self.connected = False
+                        self.last_activity = None
+                        try:
+                            await self.client.disconnect()
+                        except Exception:
+                            pass
+
+                except APIConnectionError as e:
+                    log(f"Connection lost to {self.host}: {e}")
                     self.connected = False
-                    self.last_activity = None
                     try:
                         await self.client.disconnect()
                     except Exception:
                         pass
+                    log(f"Retrying connection to {self.host} in {self.retry_interval} seconds...")
+                    await asyncio.sleep(self.retry_interval)
 
-            except APIConnectionError as e:
-                log(f"Connection lost to {self.host}: {e}")
-                self.connected = False
-                try:
-                    await self.client.disconnect()
-                except Exception:
-                    pass
-                log(f"Retrying connection to {self.host} in {self.retry_interval} seconds...")
-                await asyncio.sleep(self.retry_interval)
-
-            except Exception as e:
-                log(f"Unexpected error with {self.host}: {e}")
-                self.connected = False
-                try:
-                    await self.client.disconnect()
-                except Exception:
-                    pass
-                log(f"Retrying connection to {self.host} in {self.retry_interval} seconds...")
-                await asyncio.sleep(self.retry_interval)
+                except Exception as e:
+                    log(f"Unexpected error with {self.host}: {e}")
+                    self.connected = False
+                    try:
+                        await self.client.disconnect()
+                    except Exception:
+                        pass
+                    log(f"Retrying connection to {self.host} in {self.retry_interval} seconds...")
+                    await asyncio.sleep(self.retry_interval)
+        finally:
+            self.close()
