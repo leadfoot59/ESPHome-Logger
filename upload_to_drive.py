@@ -5,6 +5,7 @@ import os
 import sys
 
 from dotenv import load_dotenv
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -27,7 +28,12 @@ def get_drive_service():
         creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            try:
+                creds.refresh(Request())
+            except RefreshError:
+                print("Token has expired or been revoked. Deleting token.json — re-run on a machine with a browser to re-authenticate.")
+                os.remove(TOKEN_FILE)
+                sys.exit(1)
         else:
             if not os.path.exists(OAUTH_CREDENTIALS_FILE):
                 print(f"Error: OAuth credentials file not found: {OAUTH_CREDENTIALS_FILE}")
